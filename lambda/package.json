@@ -1,0 +1,28 @@
+{
+  "name": "lambda-pdf-to-jpeg",
+  "version": "1.0.0",
+  "description": "AWS Lambda for converting PDF pages to JPEG images",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --format=cjs --external:@aws-sdk/*",
+    "type-check": "tsc --noEmit",
+    "deploy": "bash ./scripts/deploy.sh",
+    "create-table": "bash ./scripts/create-table.sh"
+  },
+  "dependencies": {
+    "@arke-institute/sdk": "^2.6.2",
+    "@aws-sdk/client-dynamodb": "^3.712.0",
+    "@aws-sdk/client-lambda": "^3.712.0",
+    "@aws-sdk/lib-dynamodb": "^3.712.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

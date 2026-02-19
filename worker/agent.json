@@ -1,0 +1,16 @@
+{
+  "label": "PDF to JPEG",
+  "description": "Converts PDF pages to JPEG images using Ghostscript. Each page becomes a separate file entity linked to the source PDF.",
+  "endpoint": "https://pdf-to-jpeg-worker.nick-chimicles-professional.workers.dev",
+  "actions_required": ["entity:view", "entity:create", "entity:update"],
+  "accepts": {
+    "types": ["*"],
+    "description": "Any entity with a PDF file attachment",
+    "cardinality": "one"
+  },
+  "produces": {
+    "types": ["file"],
+    "description": "JPEG file entities, one per page",
+    "cardinality": "many"
+  }
+}

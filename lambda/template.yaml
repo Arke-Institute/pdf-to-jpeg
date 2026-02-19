@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda for converting PDF pages to JPEG images using Ghostscript
+
+# =============================================================================
+# Parameters
+# =============================================================================
+Parameters:
+  ProcessorName:
+    Type: String
+    Description: Name of the processor
+    Default: pdf-to-jpeg
+
+  TableName:
+    Type: String
+    Description: DynamoDB table name for job state
+    Default: ''  # Will use ProcessorName-jobs if empty
+
+  LambdaSecret:
+    Type: String
+    Description: Secret for authenticating requests (SSM parameter path)
+    Default: /arke/lambda-secret
+
+  MemorySize:
+    Type: Number
+    Description: Lambda memory in MB (PDF processing needs more memory)
+    Default: 3008
+    MinValue: 512
+    MaxValue: 10240
+
+  Timeout:
+    Type: Number
+    Description: Lambda timeout in seconds
+    Default: 900
+    MinValue: 1
+    MaxValue: 900
+
+# =============================================================================
+# Conditions
+# =============================================================================
+Conditions:
+  UseDefaultTableName: !Equals [!Ref TableName, '']
+
+# =============================================================================
+# Globals
+# =============================================================================
+Globals:
+  Function:
+    Timeout: !Ref Timeout
+    MemorySize: !Ref MemorySize
+    Runtime: nodejs20.x
+    # Use x86_64 for Ghostscript layer compatibility
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        NODE_OPTIONS: '--enable-source-maps'
+
+# =============================================================================
+# Resources
+# =============================================================================
+Resources:
+  # ---------------------------------------------------------------------------
+  # Lambda Function
+  # ---------------------------------------------------------------------------
+  ProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub arke-${ProcessorName}
+      Handler: index.handler
+      CodeUri: ./dist
+      Description: Convert PDF pages to JPEG images
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - '*'
+          AllowMethods:
+            - GET
+            - POST
+          AllowHeaders:
+            - Content-Type
+            - X-Lambda-Secret
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !If
+            - UseDefaultTableName
+            - !Sub arke-${ProcessorName}-jobs
+            - !Ref TableName
+          LAMBDA_SECRET: !Sub '{{resolve:ssm:${LambdaSecret}}}'
+      Policies:
+        # DynamoDB access
+        - DynamoDBCrudPolicy:
+            TableName: !If
+              - UseDefaultTableName
+              - !Ref JobsTable
+              - !Ref TableName
+        # Self-invoke for async processing
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:arke-${ProcessorName}
+      # Ghostscript layer from shelfio (x86_64 only)
+      Layers:
+        - arn:aws:lambda:us-east-1:764866452798:layer:ghostscript:17
+
+  # ---------------------------------------------------------------------------
+  # DynamoDB Table for Job State
+  # ---------------------------------------------------------------------------
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    Condition: UseDefaultTableName
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub arke-${ProcessorName}-jobs
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: job_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Service
+          Value: !Ref ProcessorName
+        - Key: Environment
+          Value: production
+
+# =============================================================================
+# Outputs
+# =============================================================================
+Outputs:
+  FunctionUrl:
+    Description: Lambda Function URL for the processor
+    Value: !GetAtt ProcessorFunctionUrl.FunctionUrl
+
+  FunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt ProcessorFunction.Arn
+
+  TableName:
+    Description: DynamoDB table name for job state
+    Value: !If
+      - UseDefaultTableName
+      - !Ref JobsTable
+      - !Ref TableName
