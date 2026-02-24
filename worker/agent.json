@@ -1,16 +1,422 @@
 {
+  "schema_version": "1.0",
+
   "label": "PDF to JPEG",
-  "description": "Converts PDF pages to JPEG images using Ghostscript. Each page becomes a separate file entity linked to the source PDF.",
+  "description": "Converts PDF pages to JPEG images using Ghostscript via AWS Lambda. Each page becomes a separate file entity linked to the source PDF.",
+
+  "detailed_description": "## Overview\n\nThe PDF to JPEG klados converts PDF documents into individual JPEG images, one per page. It uses a Lambda backend with Ghostscript for high-quality rendering and supports configurable DPI, quality, and maximum dimensions.\n\n## How It Works\n\n1. Receives a target entity with a PDF file attachment\n2. Starts an async job on the Lambda backend, passing entity ID and options\n3. Lambda downloads the PDF from Arke, renders each page to JPEG, uploads results\n4. Worker polls Lambda for completion using Durable Object alarms\n5. On success, returns the IDs of created JPEG entities for workflow handoff\n\n## When to Use\n\n- Converting scanned PDFs for OCR processing\n- Extracting images from digital PDFs for analysis\n- Creating page thumbnails or previews\n- Part of document processing pipelines (PDF → JPEG → OCR → text extraction)\n\n## Limitations\n\n- Requires Lambda backend with Ghostscript (not standalone)\n- Large PDFs may take several minutes to process\n- Very high DPI settings increase processing time and storage\n- Password-protected PDFs are not supported",
+
   "endpoint": "https://pdf-to-jpeg-worker.nick-chimicles-professional.workers.dev",
   "actions_required": ["entity:view", "entity:create", "entity:update"],
+
   "accepts": {
     "types": ["*"],
-    "description": "Any entity with a PDF file attachment",
     "cardinality": "one"
   },
   "produces": {
     "types": ["file"],
-    "description": "JPEG file entities, one per page",
     "cardinality": "many"
+  },
+
+  "input": {
+    "entity": {
+      "types": ["*"],
+      "types_description": "Any entity type is accepted as long as it has a PDF file attachment. Common types include 'document', 'file', or domain-specific types.",
+
+      "properties": {
+        "required": {},
+        "optional": {
+          "label": {
+            "type": "string",
+            "description": "Name of the source document. Used in generated page entity labels (e.g., 'Document.pdf - Page 1')."
+          }
+        },
+        "notes": "Properties are read from the target entity but not required. The key requirement is a PDF file attachment."
+      },
+
+      "file": {
+        "required": true,
+        "mime_types": ["application/pdf"],
+        "description": "PDF file attachment on the target entity. If multiple files are attached, use target_file_key in klados_input to specify which one."
+      },
+
+      "relationships": {
+        "required": {},
+        "optional": {}
+      }
+    },
+
+    "klados_input": {
+      "description": "Parameters passed via workflow input or request.input to customize PDF rendering.",
+      "properties": {
+        "optional": {
+          "target_file_key": {
+            "type": "string",
+            "description": "Specific file key to process when entity has multiple file attachments. If not specified, uses the first PDF found.",
+            "examples": ["original_pdf", "document"]
+          },
+          "options": {
+            "type": "object",
+            "description": "PDF rendering options passed to Ghostscript",
+            "properties": {
+              "quality": {
+                "type": "integer",
+                "description": "JPEG quality from 1-100. Higher values produce larger files with better quality.",
+                "default": 85,
+                "minimum": 1,
+                "maximum": 100
+              },
+              "dpi": {
+                "type": "integer",
+                "description": "Render resolution in dots per inch. 300 DPI is good for OCR, 150 DPI for previews.",
+                "default": 300,
+                "minimum": 72,
+                "maximum": 600
+              },
+              "max_dimension": {
+                "type": "integer",
+                "description": "Maximum width or height in pixels. Images exceeding this are resized proportionally.",
+                "default": 2400,
+                "minimum": 100,
+                "maximum": 10000
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "cardinality": "one"
+  },
+
+  "output": {
+    "entities": {
+      "creates": {
+        "types": ["file"],
+        "types_description": "Each PDF page becomes a 'file' type entity with a JPEG attachment.",
+
+        "properties": {
+          "guaranteed": {
+            "page_number": {
+              "type": "integer",
+              "description": "1-indexed page number from the source PDF"
+            },
+            "source_entity_id": {
+              "type": "string",
+              "description": "ID of the source PDF entity"
+            },
+            "width": {
+              "type": "integer",
+              "description": "Image width in pixels"
+            },
+            "height": {
+              "type": "integer",
+              "description": "Image height in pixels"
+            }
+          },
+          "conditional": {
+            "label": {
+              "type": "string",
+              "description": "Generated label like 'Document.pdf - Page 1'",
+              "condition": "When source entity has a label"
+            }
+          }
+        },
+
+        "relationships": {
+          "page_of": {
+            "target": "source PDF entity",
+            "direction": "outgoing",
+            "cardinality": "one",
+            "description": "Links the page image back to its source PDF"
+          }
+        },
+
+        "file_attachment": {
+          "mime_type": "image/jpeg",
+          "description": "JPEG image of the rendered PDF page"
+        }
+      },
+
+      "modifies": {
+        "target": "source PDF entity",
+        "description": "The source PDF entity is updated with relationships to all created page entities.",
+        "relationships": {
+          "has_page": {
+            "target": "each created page entity",
+            "direction": "outgoing",
+            "description": "Links source PDF to each of its page images"
+          }
+        }
+      }
+    },
+
+    "handoff": {
+      "outputs": "IDs of all created JPEG page entities",
+      "description": "Passes entity IDs of all page images to the next workflow step. Pages are ordered by page_number. Typically feeds into OCR processing."
+    },
+
+    "cardinality": "many"
+  },
+
+  "behavior": {
+    "processing": {
+      "tier": 2,
+      "tier_description": "Uses Durable Objects with SQL state for Lambda polling. The DO schedules alarms to check Lambda job status until completion.",
+      "typical_duration": "10-60 seconds for typical documents (5-20 pages). Large documents (100+ pages) may take several minutes.",
+      "idempotent": false,
+      "idempotent_description": "Re-running on the same PDF will create duplicate page entities. Downstream deduplication is recommended if duplicates are a concern."
+    },
+
+    "constraints": {
+      "pdf_size": {
+        "recommended_max": "50MB",
+        "notes": "Larger PDFs are supported but increase Lambda processing time and may approach Lambda timeout limits."
+      },
+      "page_count": {
+        "recommended_max": "500 pages",
+        "notes": "Higher page counts work but increase total processing time."
+      },
+      "lambda_timeout": "Lambda has a 15-minute timeout. Very large PDFs may fail if rendering exceeds this.",
+      "concurrency": "Safe to run multiple instances in parallel. Each job gets its own DO keyed by job_id, and Lambda handles concurrent jobs independently."
+    },
+
+    "error_handling": {
+      "no_target_entity": {
+        "behavior": "Throws error immediately",
+        "log_status": "error",
+        "message": "No target_entity in request"
+      },
+      "no_pdf_attachment": {
+        "behavior": "Lambda returns error",
+        "log_status": "error",
+        "message": "No PDF file found on entity"
+      },
+      "lambda_start_failure": {
+        "behavior": "Throws error with HTTP status and message",
+        "log_status": "error",
+        "message": "Lambda start failed (status): details"
+      },
+      "lambda_processing_error": {
+        "behavior": "Throws error after Lambda reports failure",
+        "log_status": "error",
+        "message": "Lambda error [CODE]: message"
+      },
+      "corrupt_pdf": {
+        "behavior": "Lambda returns error during rendering phase",
+        "log_status": "error",
+        "message": "Failed to render PDF"
+      }
+    },
+
+    "side_effects": [
+      "Creates file entities in target_collection (one per page)",
+      "Uploads JPEG files to Arke storage via Lambda",
+      "Updates source PDF entity with has_page relationships",
+      "Consumes Lambda compute time and network bandwidth"
+    ]
+  },
+
+  "examples": [
+    {
+      "name": "Basic PDF conversion",
+      "description": "Convert a simple PDF document to JPEG pages with default settings",
+
+      "input": {
+        "entity": {
+          "id": "ENTITY_PDF123",
+          "type": "document",
+          "properties": {
+            "label": "Annual Report 2024.pdf"
+          },
+          "files": {
+            "document": {
+              "mime_type": "application/pdf",
+              "size": 2500000
+            }
+          }
+        },
+        "klados_input": {}
+      },
+
+      "output": {
+        "entities_created": [
+          {
+            "type": "file",
+            "properties": {
+              "label": "Annual Report 2024.pdf - Page 1",
+              "page_number": 1,
+              "source_entity_id": "ENTITY_PDF123",
+              "width": 2550,
+              "height": 3300
+            },
+            "file": {
+              "mime_type": "image/jpeg"
+            }
+          },
+          {
+            "type": "file",
+            "properties": {
+              "label": "Annual Report 2024.pdf - Page 2",
+              "page_number": 2,
+              "source_entity_id": "ENTITY_PDF123",
+              "width": 2550,
+              "height": 3300
+            }
+          },
+          {
+            "type": "file",
+            "properties": {
+              "label": "Annual Report 2024.pdf - Page 3",
+              "page_number": 3,
+              "source_entity_id": "ENTITY_PDF123",
+              "width": 2550,
+              "height": 3300
+            }
+          }
+        ],
+        "handoff_outputs": ["ENTITY_PAGE1", "ENTITY_PAGE2", "ENTITY_PAGE3"],
+        "log_messages": [
+          "Starting Lambda job",
+          "Started Lambda job: lambda_job_xyz",
+          "Poll #1: rendering (1/3 pages)",
+          "Poll #2: uploading (3/3 pages)",
+          "Completed: 3 pages converted to JPEG"
+        ]
+      }
+    },
+    {
+      "name": "Custom quality for OCR",
+      "description": "Convert PDF with high DPI settings optimized for OCR accuracy",
+
+      "input": {
+        "entity": {
+          "id": "ENTITY_SCAN456",
+          "type": "document",
+          "properties": {
+            "label": "Scanned Contract.pdf"
+          },
+          "files": {
+            "scan": {
+              "mime_type": "application/pdf"
+            }
+          }
+        },
+        "klados_input": {
+          "target_file_key": "scan",
+          "options": {
+            "quality": 95,
+            "dpi": 400,
+            "max_dimension": 4000
+          }
+        }
+      },
+
+      "output": {
+        "entities_created": [
+          {
+            "type": "file",
+            "properties": {
+              "page_number": 1,
+              "source_entity_id": "ENTITY_SCAN456",
+              "width": 3400,
+              "height": 4400
+            }
+          }
+        ],
+        "handoff_outputs": ["ENTITY_PAGE1"]
+      },
+
+      "notes": "Higher DPI and quality settings produce larger images that are better for OCR but take longer to process."
+    },
+    {
+      "name": "Thumbnail generation",
+      "description": "Convert PDF with lower quality settings for quick previews",
+
+      "input": {
+        "entity": {
+          "id": "ENTITY_DOC789",
+          "type": "file",
+          "properties": {
+            "label": "Presentation.pdf"
+          }
+        },
+        "klados_input": {
+          "options": {
+            "quality": 60,
+            "dpi": 150,
+            "max_dimension": 800
+          }
+        }
+      },
+
+      "output": {
+        "entities_created": [
+          {
+            "type": "file",
+            "properties": {
+              "page_number": 1,
+              "width": 600,
+              "height": 800
+            }
+          },
+          {
+            "type": "file",
+            "properties": {
+              "page_number": 2,
+              "width": 600,
+              "height": 800
+            }
+          }
+        ],
+        "handoff_outputs": ["ENTITY_THUMB1", "ENTITY_THUMB2"]
+      },
+
+      "notes": "Lower settings produce smaller files faster, suitable for thumbnails or previews."
+    }
+  ],
+
+  "metadata": {
+    "version": "1.0.0",
+    "author": "Arke Institute",
+
+    "tags": ["file-processing", "pdf", "jpeg", "conversion", "ghostscript", "lambda", "tier-2", "ocr-pipeline"],
+
+    "related_kladoi": {
+      "often_used_with": [
+        {
+          "label": "OCR Processor",
+          "description": "Extracts text from JPEG images using vision models.",
+          "when": "After PDF to JPEG conversion, to extract text from scanned documents."
+        },
+        {
+          "label": "Text Chunker",
+          "description": "Splits extracted text into manageable chunks.",
+          "when": "After OCR, before knowledge extraction."
+        },
+        {
+          "label": "Page Assembler",
+          "description": "Combines OCR results from multiple pages into a single text.",
+          "when": "After OCR processing all pages, to reconstruct the full document text."
+        }
+      ],
+      "workflows": [
+        {
+          "label": "pdf-processing",
+          "description": "Full pipeline: PDF → JPEG pages → OCR → assemble → chunk → extract"
+        },
+        {
+          "label": "file-processing",
+          "description": "Unified entry point that routes files by type to appropriate pipelines"
+        }
+      ]
+    },
+
+    "costs": {
+      "lambda_invocations": "1 Lambda invocation per PDF (polling is HTTP, not Lambda)",
+      "compute_time": "Lambda compute scales with page count and DPI settings",
+      "storage": "JPEG files stored in Arke, size depends on quality/DPI settings",
+      "estimated_cost": "$0.01-0.10 per document depending on page count and settings"
+    }
   }
 }
