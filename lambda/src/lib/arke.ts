@@ -371,3 +371,155 @@ export async function addRelationship(
     relationships_add: [relationship],
   });
 }
+
+// =============================================================================
+// Optimized Batch Operations
+// =============================================================================
+
+/**
+ * Extract client configuration for direct HTTP calls
+ */
+function extractClientConfig(client: ArkeClient): {
+  baseUrl: string;
+  authToken: string;
+  network?: string;
+} {
+  const clientAny = client as unknown as Record<string, unknown>;
+  const config = (clientAny.config || clientAny.options || clientAny) as Record<string, unknown>;
+
+  return {
+    baseUrl: (config.baseUrl || clientAny.baseUrl || 'https://arke-v1.arke.institute') as string,
+    authToken: (config.authToken || clientAny.authToken) as string,
+    network: (config.network || clientAny.network) as string | undefined,
+  };
+}
+
+/**
+ * Batch result from API
+ */
+interface BatchCreateResult {
+  success: boolean;
+  index: number;
+  id?: string;
+  cid?: string;
+  error?: string;
+  code?: string;
+}
+
+/**
+ * Batch create file entities
+ *
+ * Uses POST /entities/batch for efficient bulk creation (up to 100 per request).
+ * Entities are created without content - upload content separately.
+ */
+export async function batchCreateFileEntities(
+  client: ArkeClient,
+  entities: Array<{
+    filename: string;
+    contentType: string;
+    collection?: string;
+    properties?: Record<string, unknown>;
+    relationships?: Array<{ predicate: string; peer: string; peer_type?: string }>;
+  }>
+): Promise<Array<{ id: string; cid: string; index: number }>> {
+  if (entities.length === 0) {
+    return [];
+  }
+
+  const { baseUrl, authToken, network } = extractClientConfig(client);
+  const collection = entities[0]?.collection;
+
+  console.log(`[batchCreateFileEntities] Creating ${entities.length} entities in batch`);
+
+  const headers: Record<string, string> = {
+    'Authorization': `ApiKey ${authToken}`,
+    'Content-Type': 'application/json',
+  };
+
+  if (network) {
+    headers['X-Arke-Network'] = network;
+  }
+
+  const response = await fetch(`${baseUrl}/entities/batch`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      default_collection: collection,
+      entities: entities.map(e => ({
+        type: 'file',
+        properties: {
+          filename: e.filename,
+          mime_type: e.contentType,
+          ...e.properties,
+        },
+        relationships: e.relationships,
+      })),
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Batch create failed (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json() as { results: BatchCreateResult[] };
+
+  // Check for failures
+  const failures = data.results.filter((r: BatchCreateResult) => !r.success);
+  if (failures.length > 0) {
+    console.error(`[batchCreateFileEntities] ${failures.length} entities failed:`, failures);
+    throw new Error(`Batch create had ${failures.length} failures: ${JSON.stringify(failures[0])}`);
+  }
+
+  const results = data.results
+    .filter((r: BatchCreateResult) => r.success && r.id && r.cid)
+    .map((r: BatchCreateResult) => ({
+      id: r.id!,
+      cid: r.cid!,
+      index: r.index,
+    }));
+
+  console.log(`[batchCreateFileEntities] Created ${results.length} entities`);
+  return results;
+}
+
+/**
+ * Parallel upload content to multiple entities
+ *
+ * Uses bounded concurrency to avoid overwhelming the API.
+ */
+export async function parallelUploadContent(
+  client: ArkeClient,
+  uploads: Array<{ entityId: string; content: Buffer; contentType: string }>,
+  concurrency: number = 10
+): Promise<void> {
+  if (uploads.length === 0) {
+    return;
+  }
+
+  // Dynamic import for p-limit (ESM module)
+  const pLimit = (await import('p-limit')).default;
+  const limit = pLimit(concurrency);
+
+  console.log(`[parallelUploadContent] Uploading ${uploads.length} files with concurrency ${concurrency}`);
+
+  const results = await Promise.allSettled(
+    uploads.map((upload, i) =>
+      limit(async () => {
+        await uploadFileContent(client, upload.entityId, upload.content, upload.contentType);
+        if ((i + 1) % 10 === 0) {
+          console.log(`[parallelUploadContent] Uploaded ${i + 1}/${uploads.length}`);
+        }
+      })
+    )
+  );
+
+  // Check for failures
+  const failures = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+  if (failures.length > 0) {
+    console.error(`[parallelUploadContent] ${failures.length} uploads failed`);
+    throw new Error(`Parallel upload had ${failures.length} failures: ${failures[0].reason}`);
+  }
+
+  console.log(`[parallelUploadContent] All ${uploads.length} uploads complete`);
+}

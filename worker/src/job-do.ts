@@ -298,6 +298,7 @@ export class KladosJobDO extends DurableObject<Env> {
     } catch (error) {
       // Handle failure
       const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('[alarm] Job failed:', errorMessage);
       logger.error('Job failed', { error: errorMessage });
 
       if (logFileId) {

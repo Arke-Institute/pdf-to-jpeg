@@ -320,3 +320,92 @@ export function cleanupTempPdf(pdfPath: string): void {
     }
   } catch { /* ignore */ }
 }
+
+// =============================================================================
+// Optimized Batch Rendering
+// =============================================================================
+
+/**
+ * Render all pages in a single Ghostscript invocation
+ *
+ * Uses %d output pattern to render all pages at once, which is much faster
+ * than spawning N separate processes.
+ */
+export async function renderAllPagesBatch(
+  pdfPath: string,
+  totalPages: number,
+  options: RenderOptions,
+  onProgress?: (rendered: number, total: number) => void
+): Promise<RenderedPage[]> {
+  ensureTmpDir();
+
+  // Verify Ghostscript exists
+  if (!existsSync(GS_PATH)) {
+    throw new Error(`Ghostscript not found at ${GS_PATH}. Lambda layer may be missing.`);
+  }
+
+  const timestamp = Date.now();
+  // Use %04d pattern for page numbering (0001, 0002, etc.)
+  const outputPattern = join(TMP_DIR, `page-${timestamp}-%04d.jpg`);
+
+  console.log(`[renderAllPagesBatch] Rendering ${totalPages} pages at ${options.dpi} DPI (batch mode)`);
+
+  // Single GS call for all pages
+  const gsCommand = [
+    GS_PATH,
+    '-dNOPAUSE',
+    '-dBATCH',
+    '-dSAFER',
+    '-sDEVICE=jpeg',
+    `-dJPEGQ=${options.quality}`,
+    `-r${options.dpi}`,
+    `-sOutputFile=${outputPattern}`,
+    pdfPath,
+  ].join(' ');
+
+  console.log(`[renderAllPagesBatch] Running: ${gsCommand}`);
+
+  try {
+    const { stdout, stderr } = await execAsync(gsCommand, { maxBuffer: 50 * 1024 * 1024 });
+    if (stderr) {
+      console.log(`[renderAllPagesBatch] GS stderr: ${stderr}`);
+    }
+    if (stdout) {
+      console.log(`[renderAllPagesBatch] GS stdout: ${stdout}`);
+    }
+  } catch (error) {
+    const err = error as { stderr?: string; stdout?: string; message?: string };
+    console.error(`[renderAllPagesBatch] GS error:`, { stderr: err.stderr, stdout: err.stdout, message: err.message });
+    throw new Error(`Ghostscript batch render failed: ${err.stderr || err.stdout || err.message}`);
+  }
+
+  // Collect results - GS uses 1-indexed page numbers with %04d
+  const results: RenderedPage[] = [];
+  for (let page = 1; page <= totalPages; page++) {
+    const outputPath = join(TMP_DIR, `page-${timestamp}-${page.toString().padStart(4, '0')}.jpg`);
+
+    if (!existsSync(outputPath)) {
+      throw new Error(`Ghostscript did not produce output for page ${page} at ${outputPath}`);
+    }
+
+    const result = await processRenderedFile(outputPath, page, options);
+    results.push(result);
+
+    // Clean up file immediately to free memory
+    try {
+      unlinkSync(outputPath);
+    } catch { /* ignore */ }
+
+    // Report progress
+    if (onProgress) {
+      onProgress(page, totalPages);
+    }
+
+    if (page % 10 === 0) {
+      console.log(`[renderAllPagesBatch] Collected ${page}/${totalPages} pages`);
+    }
+  }
+
+  console.log(`[renderAllPagesBatch] Completed batch rendering ${totalPages} pages`);
+  return results;
+}

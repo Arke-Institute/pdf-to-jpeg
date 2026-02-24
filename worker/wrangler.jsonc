@@ -26,7 +26,7 @@
   "vars": {
     "AGENT_ID": "IIKHSC1S77H8FBW9ZMTDMFTG1F",
     "AGENT_VERSION": "0.1.0",
-    "LAMBDA_URL": "https://5cg7urvbu7uj5sgdehon3we4su0yiugy.lambda-url.us-east-1.on.aws"
+    "LAMBDA_URL": "https://oyrtttipkbgmm6kxpmpqtghmaa0khwxh.lambda-url.us-east-1.on.aws"
   }
 
   // Secrets (set via `wrangler secret put`):

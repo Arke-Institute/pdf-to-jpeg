@@ -12,7 +12,14 @@ import type {
   PdfResult,
   PageResult,
 } from './lib/types.js';
-import { createArkeClient, getEntity, createAndUploadFile, updateEntity } from './lib/arke.js';
+import {
+  createArkeClient,
+  getEntity,
+  createAndUploadFile,
+  updateEntity,
+  batchCreateFileEntities,
+  parallelUploadContent,
+} from './lib/arke.js';
 import {
   resolveTargetFile,
   downloadEntityFile,
@@ -25,6 +32,7 @@ import {
   cleanupTempPdf,
   getPageCount,
   renderAllPages,
+  renderAllPagesBatch,
   type RenderOptions,
 } from './lib/pdf-render.js';
 
@@ -101,7 +109,7 @@ export async function processJob(
   });
 
   // -------------------------------------------------------------------------
-  // Step 4: Render all pages to JPEG
+  // Step 4: Render all pages to JPEG (OPTIMIZED - batch Ghostscript)
   // -------------------------------------------------------------------------
   const renderOptions: RenderOptions = {
     quality: job.quality,
@@ -111,7 +119,8 @@ export async function processJob(
 
   let renderedPages;
   try {
-    renderedPages = await renderAllPages(pdfPath, totalPages, renderOptions, async (rendered, total) => {
+    // Use batch rendering - single GS invocation for all pages
+    renderedPages = await renderAllPagesBatch(pdfPath, totalPages, renderOptions, async (rendered, total) => {
       await ctx.updateProgress({
         phase: 'rendering',
         total_pages: total,
@@ -122,10 +131,10 @@ export async function processJob(
     cleanupTempPdf(pdfPath);
   }
 
-  console.log(`[job] Rendered ${renderedPages.length} pages`);
+  console.log(`[job] Rendered ${renderedPages.length} pages (batch mode)`);
 
   // -------------------------------------------------------------------------
-  // Step 5: Upload JPEG pages as file entities
+  // Step 5a: Batch create file entities (OPTIMIZED)
   // -------------------------------------------------------------------------
   await ctx.updateProgress({
     phase: 'uploading',
@@ -134,59 +143,62 @@ export async function processJob(
     pages_uploaded: 0,
   });
 
-  const pageResults: PageResult[] = [];
-  const createdEntityIds: string[] = [];
-
-  for (const page of renderedPages) {
-    const filename = `page-${page.pageNumber.toString().padStart(4, '0')}.jpg`;
-
-    // Create file entity with relationship to source
-    const { id: fileId } = await createAndUploadFile(client, {
-      filename,
-      content: page.buffer,
-      contentType: 'image/jpeg',
-      collection: job.collection,
-      properties: {
-        page_number: page.pageNumber,
-        source_entity_id: job.entity_id,
-        width: page.width,
-        height: page.height,
-      },
-      relationships: [
-        {
-          predicate: 'derived_from',
-          peer: job.entity_id,
-        },
-      ],
-    });
-
-    pageResults.push({
+  // Prepare entity inputs for batch creation
+  const entityInputs = renderedPages.map(page => ({
+    filename: `page-${page.pageNumber.toString().padStart(4, '0')}.jpg`,
+    contentType: 'image/jpeg',
+    collection: job.collection,
+    properties: {
       page_number: page.pageNumber,
-      entity_id: fileId,
+      source_entity_id: job.entity_id,
       width: page.width,
       height: page.height,
-      size_bytes: page.buffer.length,
-    });
+    },
+    relationships: [
+      {
+        predicate: 'derived_from',
+        peer: job.entity_id,
+      },
+    ],
+  }));
 
-    createdEntityIds.push(fileId);
+  // Batch create all entities (up to 100 per request)
+  const createdEntities = await batchCreateFileEntities(client, entityInputs);
+  const createdEntityIds = createdEntities.map(e => e.id);
 
-    // Track created entities for idempotency
-    await ctx.trackCreatedEntities([fileId]);
+  console.log(`[job] Batch created ${createdEntities.length} entities`);
 
-    // Update progress
-    await ctx.updateProgress({
-      phase: 'uploading',
-      total_pages: totalPages,
-      pages_rendered: totalPages,
-      pages_uploaded: pageResults.length,
-    });
+  // Track created entities for idempotency
+  await ctx.trackCreatedEntities(createdEntityIds);
 
-    if (pageResults.length % 10 === 0) {
-      console.log(`[job] Uploaded ${pageResults.length}/${totalPages} pages`);
-    }
-  }
+  // -------------------------------------------------------------------------
+  // Step 5b: Parallel upload content (OPTIMIZED)
+  // -------------------------------------------------------------------------
+  const uploads = renderedPages.map((page, i) => ({
+    entityId: createdEntities[i].id,
+    content: page.buffer,
+    contentType: 'image/jpeg',
+  }));
 
-  console.log(`[job] Uploaded all ${pageResults.length} pages`);
+  await parallelUploadContent(client, uploads, 10);
+
+  console.log(`[job] Uploaded all ${uploads.length} content files (parallel)`);
+
+  // Build page results for response
+  const pageResults: PageResult[] = renderedPages.map((page, i) => ({
+    page_number: page.pageNumber,
+    entity_id: createdEntities[i].id,
+    width: page.width,
+    height: page.height,
+    size_bytes: page.buffer.length,
+  }));
+
+  await ctx.updateProgress({
+    phase: 'uploading',
+    total_pages: totalPages,
+    pages_rendered: totalPages,
+    pages_uploaded: totalPages,
+  });
 
   // -------------------------------------------------------------------------
   // Step 6: Link source entity to pages (has_page relationships)
