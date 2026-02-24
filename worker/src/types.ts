@@ -32,9 +32,24 @@ export interface Env {
 }
 
 /**
+ * Processing mode for PDF handling
+ *
+ * - 'auto': Detect whether PDF is scanned or digital (default)
+ * - 'render': Force render pages as images (for scanned/image-based PDFs)
+ * - 'extract': Force text extraction (for native/digital PDFs)
+ *
+ * Note: "render" mode outputs JPEGs that go through OCR.
+ * "extract" mode outputs text directly, skipping OCR.
+ */
+export type ProcessingMode = 'auto' | 'render' | 'extract';
+
+/**
  * PDF processing options passed via target_properties
  */
 export interface PdfOptions {
+  /** Processing mode - 'auto' detects PDF type */
+  mode?: ProcessingMode;
+
   /** JPEG quality 1-100 (default: 85) */
   quality?: number;
 

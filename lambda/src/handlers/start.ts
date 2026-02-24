@@ -6,12 +6,13 @@
  */
 
 import { LambdaClient, InvokeCommand, InvocationType } from '@aws-sdk/client-lambda';
-import type { StartInput, StartResponse, PdfJob, PdfProgress, PdfToJpegOptions } from '../lib/types.js';
+import type { StartInput, StartResponse, PdfJob, PdfProgress, PdfToJpegOptions, ProcessingMode } from '../lib/types.js';
 import { createJob, generateJobId } from '../lib/dynamo.js';
 
 const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 // Default options
+const DEFAULT_MODE: ProcessingMode = 'auto';
 const DEFAULT_QUALITY = 85;
 const DEFAULT_DPI = 300;
 const DEFAULT_MAX_DIMENSION = 2400;
@@ -50,11 +51,18 @@ function validateInput(input: unknown): StartInput {
  * Extract and validate PDF options from input
  */
 function extractPdfOptions(options?: Record<string, unknown>): {
+  mode: ProcessingMode;
   quality: number;
   dpi: number;
   max_dimension: number;
 } {
   const pdfOpts = (options || {}) as PdfToJpegOptions;
+
+  // Validate mode
+  let mode = DEFAULT_MODE;
+  if (pdfOpts.mode === 'auto' || pdfOpts.mode === 'render' || pdfOpts.mode === 'extract') {
+    mode = pdfOpts.mode;
+  }
 
   let quality = DEFAULT_QUALITY;
   if (typeof pdfOpts.quality === 'number') {
@@ -71,7 +79,7 @@ function extractPdfOptions(options?: Record<string, unknown>): {
     max_dimension = Math.max(100, Math.min(10000, pdfOpts.max_dimension));
   }
 
-  return { quality, dpi, max_dimension };
+  return { mode, quality, dpi, max_dimension };
 }
 
 /**
@@ -84,7 +92,7 @@ export async function handleStart(input: unknown): Promise<StartResponse> {
   const pdfOptions = extractPdfOptions(validatedInput.options);
 
   console.log(`[start] Creating job ${jobId} for entity ${validatedInput.entity_id}`);
-  console.log(`[start] Options: quality=${pdfOptions.quality}, dpi=${pdfOptions.dpi}, max_dimension=${pdfOptions.max_dimension}`);
+  console.log(`[start] Options: mode=${pdfOptions.mode}, quality=${pdfOptions.quality}, dpi=${pdfOptions.dpi}, max_dimension=${pdfOptions.max_dimension}`);
 
   // Create initial progress
   const initialProgress: PdfProgress = {
@@ -109,6 +117,7 @@ export async function handleStart(input: unknown): Promise<StartResponse> {
     target_file_key: validatedInput.target_file_key,
     options: validatedInput.options,
     // PDF-specific fields
+    mode: pdfOptions.mode,
     quality: pdfOptions.quality,
     dpi: pdfOptions.dpi,
     max_dimension: pdfOptions.max_dimension,

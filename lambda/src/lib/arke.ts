@@ -409,7 +409,8 @@ interface BatchCreateResult {
 /**
  * Batch create file entities
  *
- * Uses POST /entities/batch for efficient bulk creation (up to 100 per request).
+ * Uses POST /entities/batch for efficient bulk creation.
+ * Automatically chunks into batches of 100 (API limit).
  * Entities are created without content - upload content separately.
  */
 export async function batchCreateFileEntities(
@@ -428,8 +429,9 @@ export async function batchCreateFileEntities(
 
   const { baseUrl, authToken, network } = extractClientConfig(client);
   const collection = entities[0]?.collection;
+  const BATCH_SIZE = 100;
 
-  console.log(`[batchCreateFileEntities] Creating ${entities.length} entities in batch`);
+  console.log(`[batchCreateFileEntities] Creating ${entities.length} entities in batches of ${BATCH_SIZE}`);
 
   const headers: Record<string, string> = {
     'Authorization': `ApiKey ${authToken}`,
@@ -440,47 +442,60 @@ export async function batchCreateFileEntities(
     headers['X-Arke-Network'] = network;
   }
 
-  const response = await fetch(`${baseUrl}/entities/batch`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      default_collection: collection,
-      entities: entities.map(e => ({
-        type: 'file',
-        properties: {
-          filename: e.filename,
-          mime_type: e.contentType,
-          ...e.properties,
-        },
-        relationships: e.relationships,
-      })),
-    }),
-  });
+  const allResults: Array<{ id: string; cid: string; index: number }> = [];
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Batch create failed (${response.status}): ${errorText}`);
+  // Process in chunks of BATCH_SIZE
+  for (let i = 0; i < entities.length; i += BATCH_SIZE) {
+    const chunk = entities.slice(i, i + BATCH_SIZE);
+    const chunkNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalChunks = Math.ceil(entities.length / BATCH_SIZE);
+
+    console.log(`[batchCreateFileEntities] Processing batch ${chunkNum}/${totalChunks} (${chunk.length} entities)`);
+
+    const response = await fetch(`${baseUrl}/entities/batch`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        default_collection: collection,
+        entities: chunk.map(e => ({
+          type: 'file',
+          properties: {
+            filename: e.filename,
+            mime_type: e.contentType,
+            ...e.properties,
+          },
+          relationships: e.relationships,
+        })),
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Batch create failed (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json() as { results: BatchCreateResult[] };
+
+    // Check for failures
+    const failures = data.results.filter((r: BatchCreateResult) => !r.success);
+    if (failures.length > 0) {
+      console.error(`[batchCreateFileEntities] ${failures.length} entities failed:`, failures);
+      throw new Error(`Batch create had ${failures.length} failures: ${JSON.stringify(failures[0])}`);
+    }
+
+    const results = data.results
+      .filter((r: BatchCreateResult) => r.success && r.id && r.cid)
+      .map((r: BatchCreateResult) => ({
+        id: r.id!,
+        cid: r.cid!,
+        index: r.index + i, // Adjust index for global position
+      }));
+
+    allResults.push(...results);
   }
 
-  const data = await response.json() as { results: BatchCreateResult[] };
-
-  // Check for failures
-  const failures = data.results.filter((r: BatchCreateResult) => !r.success);
-  if (failures.length > 0) {
-    console.error(`[batchCreateFileEntities] ${failures.length} entities failed:`, failures);
-    throw new Error(`Batch create had ${failures.length} failures: ${JSON.stringify(failures[0])}`);
-  }
-
-  const results = data.results
-    .filter((r: BatchCreateResult) => r.success && r.id && r.cid)
-    .map((r: BatchCreateResult) => ({
-      id: r.id!,
-      cid: r.cid!,
-      index: r.index,
-    }));
-
-  console.log(`[batchCreateFileEntities] Created ${results.length} entities`);
-  return results;
+  console.log(`[batchCreateFileEntities] Created ${allResults.length} entities total`);
+  return allResults;
 }
 
 /**

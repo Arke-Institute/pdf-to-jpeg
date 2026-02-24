@@ -287,7 +287,7 @@ function ensureTmpDir(): void {
   }
 }
 
-function cleanTmpDir(): void {
+export function cleanTmpDir(): void {
   try {
     if (existsSync(TMP_DIR)) {
       const files = readdirSync(TMP_DIR);

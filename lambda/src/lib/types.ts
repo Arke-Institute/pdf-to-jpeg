@@ -271,9 +271,23 @@ export interface ProcessResult<TResult extends BaseResult = BaseResult> {
 // =============================================================================
 
 /**
+ * Processing mode for PDF handling
+ *
+ * - 'auto': Detect whether PDF is scanned or digital (default)
+ * - 'render': Force render pages as images (for scanned/image-based PDFs)
+ * - 'extract': Force text extraction (for native/digital PDFs)
+ *
+ * Note: "render" mode outputs JPEGs that go through OCR.
+ * "extract" mode outputs text directly, skipping OCR.
+ */
+export type ProcessingMode = 'auto' | 'render' | 'extract';
+
+/**
  * Processing options for PDF to JPEG conversion
  */
 export interface PdfToJpegOptions {
+  /** Processing mode - 'auto' detects PDF type */
+  mode?: ProcessingMode;
   /** JPEG quality 1-100 (default: 85) */
   quality?: number;
   /** Render DPI (default: 300) */
@@ -286,14 +300,15 @@ export interface PdfToJpegOptions {
  * Progress tracking for PDF processing
  */
 export interface PdfProgress extends BaseProgress {
-  phase: 'downloading' | 'rendering' | 'uploading' | 'linking' | 'complete';
+  phase: 'downloading' | 'detecting' | 'rendering' | 'extracting' | 'uploading' | 'linking' | 'complete';
   total_pages?: number;
   pages_rendered?: number;
   pages_uploaded?: number;
+  detected_type?: 'scanned' | 'digital';
 }
 
 /**
- * Single page result
+ * Single page result with routing properties for rhiza workflows
  */
 export interface PageResult {
   page_number: number;
@@ -301,6 +316,12 @@ export interface PageResult {
   width: number;
   height: number;
   size_bytes: number;
+
+  // Routing properties for rhiza scatter routing
+  /** Whether this output needs OCR processing (true for images, false for text) */
+  needs_ocr: boolean;
+  /** Type of output: 'image' (JPEG page) or 'text' (extracted text) */
+  page_type: 'image' | 'text';
 }
 
 /**
@@ -317,9 +338,15 @@ export interface PdfResult extends BaseResult {
  */
 export interface PdfJob extends BaseJob<PdfProgress, PdfResult> {
   // Processing options
+  mode: ProcessingMode;
   quality: number;
   dpi: number;
   max_dimension: number;
+
+  // Detection result (set after detection runs)
+  detected_type?: 'scanned' | 'digital';
+  detection_confidence?: number;
+  detection_method?: string;
 
   // Progress tracking
   total_pages?: number;

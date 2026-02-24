@@ -15,12 +15,15 @@
     "@aws-sdk/client-dynamodb": "^3.712.0",
     "@aws-sdk/client-lambda": "^3.712.0",
     "@aws-sdk/lib-dynamodb": "^3.712.0",
-    "p-limit": "^5.0.0"
+    "jpeg-js": "^0.4.4",
+    "p-limit": "^5.0.0",
+    "unpdf": "^0.12.1"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.145",
     "@types/node": "^22.0.0",
     "esbuild": "^0.24.0",
+    "pdf-lib": "^1.17.1",
     "typescript": "^5.7.0"
   },
   "engines": {
