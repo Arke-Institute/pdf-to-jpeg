@@ -178,26 +178,30 @@ async function processExtractMode(
 
   if (imageExtraction.totalImages > 0) {
     // Prepare image entity inputs
-    const imageEntityInputs = imageExtraction.images.map((img) => ({
-      filename: `extracted-p${img.pageNumber}-img${img.imageIndex}.jpg`,
-      contentType: 'image/jpeg',
-      collection: job.collection,
-      properties: {
-        page_number: img.pageNumber,
-        image_index: img.imageIndex,
-        source_entity_id: job.entity_id,
-        width: img.width,
-        height: img.height,
-        extraction_source: 'pdf',
-        source_image_ref: img.imageName,
-      },
-      relationships: [
-        {
-          predicate: 'extracted_from',
-          peer: job.entity_id,
+    const imageEntityInputs = imageExtraction.images.map((img) => {
+      const imageLabel = `extracted-p${img.pageNumber}-img${img.imageIndex}`;
+      return {
+        filename: `${imageLabel}.jpg`,
+        contentType: 'image/jpeg',
+        collection: job.collection,
+        properties: {
+          label: imageLabel,
+          page_number: img.pageNumber,
+          image_index: img.imageIndex,
+          source_entity_id: job.entity_id,
+          width: img.width,
+          height: img.height,
+          extraction_source: 'pdf',
+          source_image_ref: img.imageName,
         },
-      ],
-    }));
+        relationships: [
+          {
+            predicate: 'extracted_from',
+            peer: job.entity_id,
+          },
+        ],
+      };
+    });
 
     // Batch create image entities
     const createdImageEntities = await batchCreateFileEntities(client, imageEntityInputs);
@@ -266,11 +270,13 @@ async function processExtractMode(
     const hasImages = pageImages.length > 0;
     const transformedText = transformedTexts.get(page.pageNumber) || page.text;
 
+    const pageLabel = `page-${page.pageNumber.toString().padStart(4, '0')}`;
     return {
-      filename: `page-${page.pageNumber.toString().padStart(4, '0')}.txt`,
+      filename: `${pageLabel}.txt`,
       contentType: 'text/plain',
       collection: job.collection,
       properties: {
+        label: pageLabel,
         page_number: page.pageNumber,
         source_entity_id: job.entity_id,
         char_count: page.charCount,
@@ -449,23 +455,27 @@ async function processRenderMode(
   });
 
   // Prepare entity inputs for batch creation
-  const entityInputs = renderedPages.map(page => ({
-    filename: `page-${page.pageNumber.toString().padStart(4, '0')}.jpg`,
-    contentType: 'image/jpeg',
-    collection: job.collection,
-    properties: {
-      page_number: page.pageNumber,
-      source_entity_id: job.entity_id,
-      width: page.width,
-      height: page.height,
-    },
-    relationships: [
-      {
-        predicate: 'derived_from',
-        peer: job.entity_id,
+  const entityInputs = renderedPages.map(page => {
+    const pageLabel = `page-${page.pageNumber.toString().padStart(4, '0')}`;
+    return {
+      filename: `${pageLabel}.jpg`,
+      contentType: 'image/jpeg',
+      collection: job.collection,
+      properties: {
+        label: pageLabel,
+        page_number: page.pageNumber,
+        source_entity_id: job.entity_id,
+        width: page.width,
+        height: page.height,
       },
-    ],
-  }));
+      relationships: [
+        {
+          predicate: 'derived_from',
+          peer: job.entity_id,
+        },
+      ],
+    };
+  });
 
   // Batch create all entities (up to 100 per request)
   const createdEntities = await batchCreateFileEntities(client, entityInputs);
