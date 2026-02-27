@@ -289,8 +289,15 @@ export class KladosJobDO extends DurableObject<Env> {
 
       // Finalize log
       logger.success('Job completed');
+
+      // Extract output entity IDs for the log
+      const outputIds = (result.outputs || []).map((o: Output) =>
+        typeof o === 'string' ? o : o.entity_id
+      );
+
       await updateLogStatus(client, logFileId, 'done', {
         messages: logger.getMessages(),
+        outputs: outputIds.length > 0 ? outputIds : undefined,
       });
 
       this.sql.exec(`UPDATE job_state SET status = 'done' WHERE id = 1`);

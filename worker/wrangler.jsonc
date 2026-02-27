@@ -32,7 +32,7 @@
     "AGENT_ID_TEST": "IIKHSC1S77H8FBW9ZMTDMFTG1F",
     "AGENT_ID_MAIN": "01KJ6WRER2NMWF7P7AJEP33J6H",
 
-    "LAMBDA_URL": "https://oyrtttipkbgmm6kxpmpqtghmaa0khwxh.lambda-url.us-east-1.on.aws"
+    "LAMBDA_URL": "https://5cg7urvbu7uj5sgdehon3we4su0yiugy.lambda-url.us-east-1.on.aws"
   }
 
   // Secrets (set via `wrangler secret put`):
