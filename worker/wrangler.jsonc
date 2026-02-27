@@ -24,12 +24,20 @@
 
   // Environment variables (non-secret)
   "vars": {
-    "AGENT_ID": "IIKHSC1S77H8FBW9ZMTDMFTG1F",
+    // Default (fallback)
+    "AGENT_ID": "01KJ6WRER2NMWF7P7AJEP33J6H",
     "AGENT_VERSION": "0.1.0",
+
+    // Network-specific agent IDs
+    "AGENT_ID_TEST": "IIKHSC1S77H8FBW9ZMTDMFTG1F",
+    "AGENT_ID_MAIN": "01KJ6WRER2NMWF7P7AJEP33J6H",
+
     "LAMBDA_URL": "https://oyrtttipkbgmm6kxpmpqtghmaa0khwxh.lambda-url.us-east-1.on.aws"
   }
 
   // Secrets (set via `wrangler secret put`):
-  // - ARKE_AGENT_KEY: Your agent API key (ak_...)
+  // - ARKE_AGENT_KEY: Default agent API key (ak_...) - fallback
+  // - ARKE_AGENT_KEY_TEST: Test network klados key
+  // - ARKE_AGENT_KEY_MAIN: Main network klados key
   // - LAMBDA_SECRET: Lambda authentication secret
 }
