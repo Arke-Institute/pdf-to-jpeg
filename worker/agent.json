@@ -4,6 +4,14 @@
   "label": "PDF to JPEG",
   "description": "Converts PDF pages to JPEG images using Ghostscript via AWS Lambda. Each page becomes a separate file entity linked to the source PDF.",
 
+  "match": {
+    "path": "properties.content",
+    "any": {
+      "path": "content_type",
+      "equals": "application/pdf"
+    }
+  },
+
   "detailed_description": "## Overview\n\nThe PDF to JPEG klados converts PDF documents into individual JPEG images, one per page. It uses a Lambda backend with Ghostscript for high-quality rendering and supports configurable DPI, quality, and maximum dimensions.\n\n## How It Works\n\n1. Receives a target entity with a PDF file attachment\n2. Starts an async job on the Lambda backend, passing entity ID and options\n3. Lambda downloads the PDF from Arke, renders each page to JPEG, uploads results\n4. Worker polls Lambda for completion using Durable Object alarms\n5. On success, returns the IDs of created JPEG entities for workflow handoff\n\n## When to Use\n\n- Converting scanned PDFs for OCR processing\n- Extracting images from digital PDFs for analysis\n- Creating page thumbnails or previews\n- Part of document processing pipelines (PDF → JPEG → OCR → text extraction)\n\n## Limitations\n\n- Requires Lambda backend with Ghostscript (not standalone)\n- Large PDFs may take several minutes to process\n- Very high DPI settings increase processing time and storage\n- Password-protected PDFs are not supported",
 
   "endpoint": "https://pdf-to-jpeg-worker.nick-chimicles-professional.workers.dev",
