@@ -35,7 +35,7 @@ import {
   savePdfToTemp,
   cleanupTempPdf,
   getPageCount,
-  renderAllPagesBatch,
+  renderAllPagesParallel,
   type RenderOptions,
 } from './lib/pdf-render.js';
 import { detectPdfTypeFromBuffer } from './lib/pdf-analysis.js';
@@ -430,8 +430,8 @@ async function processRenderMode(
 
   let renderedPages;
   try {
-    // Use batch rendering - single GS invocation for all pages
-    renderedPages = await renderAllPagesBatch(pdfPath, totalPages, renderOptions, async (rendered, total) => {
+    // Use parallel rendering - multiple concurrent GS processes for speed
+    renderedPages = await renderAllPagesParallel(pdfPath, totalPages, renderOptions, 4, async (rendered, total) => {
       await ctx.updateProgress({
         phase: 'rendering',
         total_pages: total,
@@ -442,7 +442,7 @@ async function processRenderMode(
     cleanupTempPdf(pdfPath);
   }
 
-  console.log(`[job] Rendered ${renderedPages.length} pages (batch mode)`);
+  console.log(`[job] Rendered ${renderedPages.length} pages (parallel mode)`);
 
   // -------------------------------------------------------------------------
   // Step 5a: Batch create file entities (OPTIMIZED)

@@ -16,6 +16,7 @@ export interface LambdaStartInput {
   collection?: string;
   target_file_key?: string;
   options?: {
+    mode?: 'auto' | 'render' | 'extract';
     quality?: number;
     dpi?: number;
     max_dimension?: number;

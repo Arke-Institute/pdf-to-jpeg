@@ -506,7 +506,7 @@ export async function batchCreateFileEntities(
 export async function parallelUploadContent(
   client: ArkeClient,
   uploads: Array<{ entityId: string; content: Buffer; contentType: string }>,
-  concurrency: number = 10
+  concurrency: number = 25
 ): Promise<void> {
   if (uploads.length === 0) {
     return;

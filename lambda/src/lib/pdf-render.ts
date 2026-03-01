@@ -409,3 +409,156 @@ export async function renderAllPagesBatch(
   console.log(`[renderAllPagesBatch] Completed batch rendering ${totalPages} pages`);
   return results;
 }
+
+// =============================================================================
+// Parallel Rendering (Multiple GS Processes)
+// =============================================================================
+
+/**
+ * Render a range of pages to JPEG in a single GS invocation
+ *
+ * Used by renderAllPagesParallel to process page chunks concurrently.
+ */
+async function renderPageRange(
+  pdfPath: string,
+  firstPage: number,
+  lastPage: number,
+  options: RenderOptions,
+  workerId: number,
+  timestamp: number
+): Promise<RenderedPage[]> {
+  const outputPattern = join(TMP_DIR, `page-${timestamp}-w${workerId}-%04d.jpg`);
+
+  const gsCommand = [
+    GS_PATH,
+    '-dNOPAUSE',
+    '-dBATCH',
+    '-dSAFER',
+    '-sDEVICE=jpeg',
+    `-dJPEGQ=${options.quality}`,
+    `-r${options.dpi}`,
+    `-dFirstPage=${firstPage}`,
+    `-dLastPage=${lastPage}`,
+    `-sOutputFile=${outputPattern}`,
+    pdfPath,
+  ].join(' ');
+
+  console.log(`[renderPageRange] Worker ${workerId}: pages ${firstPage}-${lastPage}`);
+
+  try {
+    const { stdout, stderr } = await execAsync(gsCommand, { maxBuffer: 50 * 1024 * 1024 });
+    if (stderr) {
+      console.log(`[renderPageRange] Worker ${workerId} GS stderr: ${stderr}`);
+    }
+    if (stdout) {
+      console.log(`[renderPageRange] Worker ${workerId} GS stdout: ${stdout}`);
+    }
+  } catch (error) {
+    const err = error as { stderr?: string; stdout?: string; message?: string };
+    console.error(`[renderPageRange] Worker ${workerId} GS error:`, { stderr: err.stderr, stdout: err.stdout, message: err.message });
+    throw new Error(`Ghostscript failed for pages ${firstPage}-${lastPage}: ${err.stderr || err.stdout || err.message}`);
+  }
+
+  // Collect results - GS outputs pages sequentially within the range
+  // Output files are named with page index relative to the range (1-indexed)
+  const results: RenderedPage[] = [];
+  const pageCount = lastPage - firstPage + 1;
+
+  for (let i = 1; i <= pageCount; i++) {
+    const actualPageNum = firstPage + i - 1;
+    const outputPath = join(TMP_DIR, `page-${timestamp}-w${workerId}-${i.toString().padStart(4, '0')}.jpg`);
+
+    if (!existsSync(outputPath)) {
+      throw new Error(`Ghostscript did not produce output for page ${actualPageNum} at ${outputPath}`);
+    }
+
+    const result = await processRenderedFile(outputPath, actualPageNum, options);
+    results.push(result);
+
+    // Clean up file immediately to free memory
+    try {
+      unlinkSync(outputPath);
+    } catch { /* ignore */ }
+  }
+
+  console.log(`[renderPageRange] Worker ${workerId} completed ${pageCount} pages`);
+  return results;
+}
+
+/**
+ * Render all pages using parallel Ghostscript processes
+ *
+ * Splits pages into chunks and runs multiple GS processes concurrently.
+ * This provides significant speedup on multi-core systems (Lambda has 2-6 vCPUs).
+ *
+ * @param pdfPath - Path to the PDF file
+ * @param totalPages - Total number of pages to render
+ * @param options - Render options (quality, dpi, maxDimension)
+ * @param concurrency - Number of parallel GS processes (default: 4)
+ * @param onProgress - Optional progress callback
+ */
+export async function renderAllPagesParallel(
+  pdfPath: string,
+  totalPages: number,
+  options: RenderOptions,
+  concurrency: number = 4,
+  onProgress?: (rendered: number, total: number) => void
+): Promise<RenderedPage[]> {
+  ensureTmpDir();
+
+  // Verify Ghostscript exists
+  if (!existsSync(GS_PATH)) {
+    throw new Error(`Ghostscript not found at ${GS_PATH}. Lambda layer may be missing.`);
+  }
+
+  // For very small PDFs, just use the batch method
+  if (totalPages <= concurrency) {
+    console.log(`[renderAllPagesParallel] Small PDF (${totalPages} pages), using batch mode`);
+    return renderAllPagesBatch(pdfPath, totalPages, options, onProgress);
+  }
+
+  const timestamp = Date.now();
+  const pagesPerWorker = Math.ceil(totalPages / concurrency);
+
+  console.log(`[renderAllPagesParallel] Rendering ${totalPages} pages at ${options.dpi} DPI`);
+  console.log(`[renderAllPagesParallel] Using ${concurrency} workers, ~${pagesPerWorker} pages each`);
+
+  // Build work chunks
+  const chunks: Array<{ workerId: number; firstPage: number; lastPage: number }> = [];
+  for (let i = 0; i < concurrency; i++) {
+    const firstPage = i * pagesPerWorker + 1;
+    const lastPage = Math.min((i + 1) * pagesPerWorker, totalPages);
+
+    if (firstPage <= totalPages) {
+      chunks.push({ workerId: i, firstPage, lastPage });
+    }
+  }
+
+  console.log(`[renderAllPagesParallel] Work distribution: ${chunks.map(c => `W${c.workerId}:${c.firstPage}-${c.lastPage}`).join(', ')}`);
+
+  // Run all workers in parallel
+  const startTime = Date.now();
+  const chunkResults = await Promise.all(
+    chunks.map(chunk =>
+      renderPageRange(pdfPath, chunk.firstPage, chunk.lastPage, options, chunk.workerId, timestamp)
+    )
+  );
+  const renderTime = Date.now() - startTime;
+
+  // Merge results in page order
+  const allResults: RenderedPage[] = [];
+  for (const chunkResult of chunkResults) {
+    allResults.push(...chunkResult);
+  }
+
+  // Sort by page number to ensure correct order
+  allResults.sort((a, b) => a.pageNumber - b.pageNumber);
+
+  // Report final progress
+  if (onProgress) {
+    onProgress(totalPages, totalPages);
+  }
+
+  console.log(`[renderAllPagesParallel] Completed ${totalPages} pages in ${renderTime}ms (${Math.round(totalPages / (renderTime / 1000))} pages/sec)`);
+  return allResults;
+}
