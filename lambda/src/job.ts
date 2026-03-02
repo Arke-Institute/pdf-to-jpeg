@@ -179,9 +179,10 @@ async function processExtractMode(
   if (imageExtraction.totalImages > 0) {
     // Prepare image entity inputs
     const imageEntityInputs = imageExtraction.images.map((img) => {
-      const imageLabel = `extracted-p${img.pageNumber}-img${img.imageIndex}`;
+      const imageLabel = `Page ${img.pageNumber} - Image ${img.imageIndex + 1}`;
+      const filename = `page-${img.pageNumber}-image-${img.imageIndex + 1}.jpg`;
       return {
-        filename: `${imageLabel}.jpg`,
+        filename,
         contentType: 'image/jpeg',
         collection: job.collection,
         properties: {
@@ -270,9 +271,9 @@ async function processExtractMode(
     const hasImages = pageImages.length > 0;
     const transformedText = transformedTexts.get(page.pageNumber) || page.text;
 
-    const pageLabel = `page-${page.pageNumber.toString().padStart(4, '0')}`;
+    const pageLabel = `Page ${page.pageNumber}`;
     return {
-      filename: `${pageLabel}.txt`,
+      filename: `page-${page.pageNumber}.txt`,
       contentType: 'text/plain',
       collection: job.collection,
       properties: {
@@ -456,9 +457,9 @@ async function processRenderMode(
 
   // Prepare entity inputs for batch creation
   const entityInputs = renderedPages.map(page => {
-    const pageLabel = `page-${page.pageNumber.toString().padStart(4, '0')}`;
+    const pageLabel = `Page ${page.pageNumber}`;
     return {
-      filename: `${pageLabel}.jpg`,
+      filename: `page-${page.pageNumber}.jpg`,
       contentType: 'image/jpeg',
       collection: job.collection,
       properties: {
