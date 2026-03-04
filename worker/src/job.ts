@@ -156,14 +156,18 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   sql.exec('DELETE FROM poll_state WHERE id = 1');
 
   const totalPages = status.result?.total_pages || 0;
-  const entityIds = status.result?.entity_ids || [];
+  const pages = status.result?.pages || [];
 
-  logger.success(`Completed: ${totalPages} pages converted to JPEG`, {
-    entity_count: entityIds.length,
+  logger.success(`Completed: ${totalPages} pages processed`, {
+    entity_count: pages.length,
     poll_count: pollCount,
   });
 
   return {
-    outputs: entityIds,
+    outputs: pages.map((page) => ({
+      entity_id: page.entity_id,
+      needs_ocr: page.needs_ocr,
+      page_type: page.page_type,
+    })),
   };
 }

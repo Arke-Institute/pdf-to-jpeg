@@ -42,6 +42,8 @@ export interface LambdaPageResult {
   width: number;
   height: number;
   size_bytes: number;
+  needs_ocr: boolean;
+  page_type: 'image' | 'text';
 }
 
 export interface LambdaResult {
