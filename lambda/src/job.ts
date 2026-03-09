@@ -16,9 +16,11 @@ import type {
   PdfJob,
   PdfResult,
   PageResult,
+  PageGroupResult,
 } from './lib/types.js';
 import {
   createArkeClient,
+  createEntity,
   getEntity,
   updateEntity,
   batchCreateFileEntities,
@@ -49,6 +51,108 @@ import { extractImagesFromBuffer, transformTextWithImageRefs } from './lib/pdf-i
 const MAX_PDF_SIZE = 100 * 1024 * 1024; // 100MB
 
 // =============================================================================
+// Page Grouping
+// =============================================================================
+
+/**
+ * Group items into chunks of the specified size.
+ * groupSize <= 1 returns each item in its own group (no grouping).
+ */
+function groupItems<T>(items: T[], groupSize: number): T[][] {
+  if (groupSize <= 1) return items.map(item => [item]);
+  const groups: T[][] = [];
+  for (let i = 0; i < items.length; i += groupSize) {
+    groups.push(items.slice(i, i + groupSize));
+  }
+  return groups;
+}
+
+/**
+ * Build concatenated text with page markers for a group of pages.
+ */
+function buildGroupText(pages: Array<{ pageNumber: number; text: string }>): string {
+  return pages
+    .map(p => `--- Page ${p.pageNumber} ---\n${p.text}`)
+    .join('\n\n');
+}
+
+/**
+ * Create page_group entities from grouped page results.
+ * Returns the created group results for use as workflow outputs.
+ */
+async function createPageGroups(
+  client: ReturnType<typeof createArkeClient>,
+  groups: PageResult[][],
+  opts: {
+    sourceEntityId: string;
+    collection: string;
+    needsOcr: boolean;
+    pageType: 'text' | 'image';
+    /** For digital mode: map of page_number -> text content */
+    pageTexts?: Map<number, string>;
+  },
+): Promise<PageGroupResult[]> {
+  const totalGroups = groups.length;
+  const results: PageGroupResult[] = [];
+
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i];
+    const pageNumbers = group.map(p => p.page_number);
+    const pageEntityIds = group.map(p => p.entity_id);
+    const firstPage = pageNumbers[0];
+    const lastPage = pageNumbers[pageNumbers.length - 1];
+
+    // Build properties
+    const properties: Record<string, unknown> = {
+      label: firstPage === lastPage ? `Page ${firstPage}` : `Pages ${firstPage}-${lastPage}`,
+      page_numbers: pageNumbers,
+      group_index: i,
+      total_groups: totalGroups,
+      source_entity_id: opts.sourceEntityId,
+      needs_ocr: opts.needsOcr,
+      page_type: opts.pageType,
+    };
+
+    // For digital mode, include concatenated text
+    if (opts.pageTexts) {
+      const pagesWithText = pageNumbers.map(pn => ({
+        pageNumber: pn,
+        text: opts.pageTexts!.get(pn) || '',
+      }));
+      properties.text = buildGroupText(pagesWithText);
+    }
+
+    // Create page_group entity with contains_page relationships
+    const entity = await createEntity(client, {
+      type: 'page_group',
+      collection: opts.collection,
+      properties,
+      relationships: [
+        // Link to source PDF
+        { predicate: 'derived_from', peer: opts.sourceEntityId },
+        // Link to individual pages with page_number metadata
+        ...pageEntityIds.map((pageId) => ({
+          predicate: 'contains_page',
+          peer: pageId,
+        })),
+      ],
+    });
+
+    results.push({
+      group_index: i,
+      entity_id: entity.id,
+      page_numbers: pageNumbers,
+      page_entity_ids: pageEntityIds,
+      needs_ocr: opts.needsOcr,
+      page_type: opts.pageType,
+    });
+  }
+
+  console.log(`[job] Created ${results.length} page groups`);
+  return results;
+}
+
+// =============================================================================
 // Main Processing Function
 // =============================================================================
 
@@ -61,7 +165,7 @@ export async function processJob(
   const { job } = ctx;
 
   console.log(`[job] Processing PDF entity ${job.entity_id}`);
-  console.log(`[job] Mode: ${job.mode}, quality=${job.quality}, dpi=${job.dpi}, max_dimension=${job.max_dimension}`);
+  console.log(`[job] Mode: ${job.mode}, quality=${job.quality}, dpi=${job.dpi}, max_dimension=${job.max_dimension}, page_group_size=${job.page_group_size}`);
 
   // -------------------------------------------------------------------------
   // Step 1: Create Arke client and get entity
@@ -363,27 +467,68 @@ async function processExtractMode(
   console.log(`[job] Linked source entity to ${createdTextEntityIds.length} pages and ${allImageResults.length} images`);
 
   // -------------------------------------------------------------------------
-  // Step 8: Return combined results
+  // Step 8: Create page groups (if grouping enabled)
+  // -------------------------------------------------------------------------
+  const groupSize = job.page_group_size ?? 3;
+  let outputEntityIds: string[];
+
+  if (groupSize > 1 && textPageResults.length > 1) {
+    await ctx.updateProgress({ phase: 'grouping' });
+
+    // Build page text map for concatenation
+    const pageTextMap = new Map<number, string>();
+    textExtraction.pages.forEach((page) => {
+      const transformedText = transformedTexts.get(page.pageNumber) || page.text;
+      pageTextMap.set(page.pageNumber, transformedText);
+    });
+
+    // Group text pages
+    const groups = groupItems(textPageResults, groupSize);
+    const groupResults = await createPageGroups(client, groups, {
+      sourceEntityId: job.entity_id,
+      collection: job.collection!,
+      needsOcr: false,
+      pageType: 'text',
+      pageTexts: pageTextMap,
+    });
+
+    // Track group entities
+    await ctx.trackCreatedEntities(groupResults.map(g => g.entity_id));
+
+    // Output: group entity IDs + extracted image entity IDs
+    outputEntityIds = [
+      ...groupResults.map(g => g.entity_id),
+      ...allImageResults.map(r => r.entity_id),
+    ];
+
+    console.log(`[job] Created ${groupResults.length} page groups from ${textPageResults.length} text pages`);
+  } else {
+    // No grouping — output individual pages + images (original behavior)
+    outputEntityIds = [
+      ...createdTextEntityIds,
+      ...allImageResults.map(r => r.entity_id),
+    ];
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 9: Return combined results
   // -------------------------------------------------------------------------
   await ctx.updateProgress({ phase: 'complete' });
 
-  // Combine text and image results
-  // Text pages come first (they reference images via arke: URIs)
-  // Images come after (they need OCR processing)
+  // All pages (individual) still tracked in result for reference
   const allResults: PageResult[] = [...textPageResults, ...allImageResults];
-  const allEntityIds = [...createdTextEntityIds, ...allImageResults.map(r => r.entity_id)];
 
   const result: PdfResult = {
     source_id: job.entity_id,
     total_pages: textExtraction.totalPages,
     pages: allResults,
-    entity_ids: allEntityIds,
+    entity_ids: outputEntityIds,
   };
 
-  console.log(`[job] Processing complete: ${textExtraction.totalPages} text pages + ${allImageResults.length} extracted images`);
+  console.log(`[job] Processing complete: ${textExtraction.totalPages} text pages + ${allImageResults.length} extracted images (${outputEntityIds.length} outputs)`);
 
   return {
-    entity_ids: allEntityIds,
+    entity_ids: outputEntityIds,
     result,
   };
 }
@@ -535,7 +680,35 @@ async function processRenderMode(
   console.log(`[job] Linked source entity to ${pageResults.length} pages`);
 
   // -------------------------------------------------------------------------
-  // Step 7: Return results
+  // Step 7: Create page groups (if grouping enabled)
+  // -------------------------------------------------------------------------
+  const groupSize = job.page_group_size ?? 3;
+  let outputEntityIds: string[];
+
+  if (groupSize > 1 && pageResults.length > 1) {
+    await ctx.updateProgress({ phase: 'grouping' });
+
+    const groups = groupItems(pageResults, groupSize);
+    const groupResults = await createPageGroups(client, groups, {
+      sourceEntityId: job.entity_id,
+      collection: job.collection!,
+      needsOcr: true,
+      pageType: 'image',
+    });
+
+    // Track group entities
+    await ctx.trackCreatedEntities(groupResults.map(g => g.entity_id));
+
+    outputEntityIds = groupResults.map(g => g.entity_id);
+
+    console.log(`[job] Created ${groupResults.length} page groups from ${pageResults.length} rendered pages`);
+  } else {
+    // No grouping — output individual pages (original behavior)
+    outputEntityIds = createdEntityIds;
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 8: Return results
   // -------------------------------------------------------------------------
   await ctx.updateProgress({ phase: 'complete' });
 
@@ -543,13 +716,13 @@ async function processRenderMode(
     source_id: job.entity_id,
     total_pages: totalPages,
     pages: pageResults,
-    entity_ids: createdEntityIds,
+    entity_ids: outputEntityIds,
   };
 
-  console.log(`[job] Processing complete: ${totalPages} pages converted`);
+  console.log(`[job] Processing complete: ${totalPages} pages converted (${outputEntityIds.length} outputs)`);
 
   return {
-    entity_ids: createdEntityIds,
+    entity_ids: outputEntityIds,
     result,
   };
 }

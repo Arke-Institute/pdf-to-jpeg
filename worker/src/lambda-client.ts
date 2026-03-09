@@ -20,6 +20,7 @@ export interface LambdaStartInput {
     quality?: number;
     dpi?: number;
     max_dimension?: number;
+    page_group_size?: number;
   };
 }
 
@@ -30,7 +31,7 @@ export interface LambdaStartResponse {
 }
 
 export interface LambdaProgress {
-  phase: 'downloading' | 'rendering' | 'uploading' | 'linking' | 'complete';
+  phase: 'downloading' | 'rendering' | 'uploading' | 'linking' | 'grouping' | 'complete';
   total_pages?: number;
   pages_rendered?: number;
   pages_uploaded?: number;

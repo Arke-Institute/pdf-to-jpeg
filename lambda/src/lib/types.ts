@@ -294,13 +294,15 @@ export interface PdfToJpegOptions {
   dpi?: number;
   /** Maximum dimension (width or height) before resize (default: 2400) */
   max_dimension?: number;
+  /** Number of pages per group for KG extraction context (default: 3, 0 or 1 = no grouping) */
+  page_group_size?: number;
 }
 
 /**
  * Progress tracking for PDF processing
  */
 export interface PdfProgress extends BaseProgress {
-  phase: 'downloading' | 'detecting' | 'rendering' | 'extracting' | 'uploading' | 'linking' | 'complete';
+  phase: 'downloading' | 'detecting' | 'rendering' | 'extracting' | 'uploading' | 'linking' | 'grouping' | 'complete';
   total_pages?: number;
   pages_rendered?: number;
   pages_uploaded?: number;
@@ -325,6 +327,20 @@ export interface PageResult {
 }
 
 /**
+ * Page group result - groups multiple pages for better KG extraction context
+ */
+export interface PageGroupResult {
+  group_index: number;
+  entity_id: string;
+  page_numbers: number[];
+  page_entity_ids: string[];
+
+  // Routing properties (same as PageResult for workflow compatibility)
+  needs_ocr: boolean;
+  page_type: 'image' | 'text';
+}
+
+/**
  * Result from PDF processing
  */
 export interface PdfResult extends BaseResult {
@@ -342,6 +358,7 @@ export interface PdfJob extends BaseJob<PdfProgress, PdfResult> {
   quality: number;
   dpi: number;
   max_dimension: number;
+  page_group_size: number;
 
   // Detection result (set after detection runs)
   detected_type?: 'scanned' | 'digital';

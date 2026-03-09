@@ -16,6 +16,7 @@ const DEFAULT_MODE: ProcessingMode = 'auto';
 const DEFAULT_QUALITY = 85;
 const DEFAULT_DPI = 300;
 const DEFAULT_MAX_DIMENSION = 2400;
+const DEFAULT_PAGE_GROUP_SIZE = 3;
 
 /**
  * Validate start input
@@ -55,6 +56,7 @@ function extractPdfOptions(options?: Record<string, unknown>): {
   quality: number;
   dpi: number;
   max_dimension: number;
+  page_group_size: number;
 } {
   const pdfOpts = (options || {}) as PdfToJpegOptions;
 
@@ -79,7 +81,12 @@ function extractPdfOptions(options?: Record<string, unknown>): {
     max_dimension = Math.max(100, Math.min(10000, pdfOpts.max_dimension));
   }
 
-  return { mode, quality, dpi, max_dimension };
+  let page_group_size = DEFAULT_PAGE_GROUP_SIZE;
+  if (typeof pdfOpts.page_group_size === 'number') {
+    page_group_size = Math.max(0, Math.min(20, pdfOpts.page_group_size));
+  }
+
+  return { mode, quality, dpi, max_dimension, page_group_size };
 }
 
 /**
@@ -92,7 +99,7 @@ export async function handleStart(input: unknown): Promise<StartResponse> {
   const pdfOptions = extractPdfOptions(validatedInput.options);
 
   console.log(`[start] Creating job ${jobId} for entity ${validatedInput.entity_id}`);
-  console.log(`[start] Options: mode=${pdfOptions.mode}, quality=${pdfOptions.quality}, dpi=${pdfOptions.dpi}, max_dimension=${pdfOptions.max_dimension}`);
+  console.log(`[start] Options: mode=${pdfOptions.mode}, quality=${pdfOptions.quality}, dpi=${pdfOptions.dpi}, max_dimension=${pdfOptions.max_dimension}, page_group_size=${pdfOptions.page_group_size}`);
 
   // Create initial progress
   const initialProgress: PdfProgress = {
@@ -121,6 +128,7 @@ export async function handleStart(input: unknown): Promise<StartResponse> {
     quality: pdfOptions.quality,
     dpi: pdfOptions.dpi,
     max_dimension: pdfOptions.max_dimension,
+    page_group_size: pdfOptions.page_group_size,
   };
 
   await createJob(job);

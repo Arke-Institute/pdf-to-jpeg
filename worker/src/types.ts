@@ -73,6 +73,9 @@ export interface PdfOptions {
 
   /** Max width/height before resize (default: 2400) */
   max_dimension?: number;
+
+  /** Number of pages per group for KG extraction context (default: 3, 0 or 1 = no grouping) */
+  page_group_size?: number;
 }
 
 /**
