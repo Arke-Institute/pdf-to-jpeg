@@ -146,6 +146,15 @@ async function createPageGroups(
       ],
     });
 
+    // Add member_of relationships from each page back to the group
+    for (const pageId of pageEntityIds) {
+      await updateEntity(client, pageId, {
+        relationships_add: [
+          { predicate: 'member_of', peer: entity.id },
+        ],
+      });
+    }
+
     results.push({
       group_index: i,
       entity_id: entity.id,
