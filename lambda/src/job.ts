@@ -17,6 +17,7 @@ import type {
   PdfResult,
   PageResult,
   PageGroupResult,
+  OutputItem,
 } from './lib/types.js';
 import {
   createArkeClient,
@@ -69,10 +70,16 @@ function groupItems<T>(items: T[], groupSize: number): T[][] {
 
 /**
  * Build concatenated text with page markers for a group of pages.
+ * When entityId is provided, markers include arke: URIs for page identity.
  */
-function buildGroupText(pages: Array<{ pageNumber: number; text: string }>): string {
+function buildGroupText(pages: Array<{ pageNumber: number; text: string; entityId?: string }>): string {
   return pages
-    .map(p => `--- Page ${p.pageNumber} ---\n${p.text}`)
+    .map(p => {
+      const marker = p.entityId
+        ? `--- [Page ${p.pageNumber}](arke:${p.entityId}) ---`
+        : `--- Page ${p.pageNumber} ---`;
+      return `${marker}\n${p.text}`;
+    })
     .join('\n\n');
 }
 
@@ -113,11 +120,12 @@ async function createPageGroups(
       page_type: opts.pageType,
     };
 
-    // For digital mode, include concatenated text
+    // For digital mode, include concatenated text with arke: URIs
     if (opts.pageTexts) {
-      const pagesWithText = pageNumbers.map(pn => ({
+      const pagesWithText = pageNumbers.map((pn, idx) => ({
         pageNumber: pn,
         text: opts.pageTexts!.get(pn) || '',
+        entityId: pageEntityIds[idx],
       }));
       properties.text = buildGroupText(pagesWithText);
     }
@@ -518,14 +526,36 @@ async function processExtractMode(
   // All pages (individual) still tracked in result for reference
   const allResults: PageResult[] = [...textPageResults, ...allImageResults];
 
+  // Build output items with routing properties
+  const outputs: OutputItem[] = [];
+  if (groupSize > 1 && textPageResults.length > 1) {
+    // Groups as outputs (text, no OCR needed)
+    for (const id of outputEntityIds.filter(id => !allImageResults.some(r => r.entity_id === id))) {
+      outputs.push({ entity_id: id, needs_ocr: false, page_type: 'text' });
+    }
+    // Extracted images as outputs (need OCR)
+    for (const r of allImageResults) {
+      outputs.push({ entity_id: r.entity_id, needs_ocr: true, page_type: 'image' });
+    }
+  } else {
+    // Individual pages + images as outputs
+    for (const r of textPageResults) {
+      outputs.push({ entity_id: r.entity_id, needs_ocr: r.needs_ocr, page_type: r.page_type });
+    }
+    for (const r of allImageResults) {
+      outputs.push({ entity_id: r.entity_id, needs_ocr: r.needs_ocr, page_type: r.page_type });
+    }
+  }
+
   const result: PdfResult = {
     source_id: job.entity_id,
     total_pages: textExtraction.totalPages,
     pages: allResults,
     entity_ids: outputEntityIds,
+    outputs,
   };
 
-  console.log(`[job] Processing complete: ${textExtraction.totalPages} text pages + ${allImageResults.length} extracted images (${outputEntityIds.length} outputs)`);
+  console.log(`[job] Processing complete: ${textExtraction.totalPages} text pages + ${allImageResults.length} extracted images (${outputs.length} outputs)`);
 
   return {
     entity_ids: outputEntityIds,
@@ -712,14 +742,22 @@ async function processRenderMode(
   // -------------------------------------------------------------------------
   await ctx.updateProgress({ phase: 'complete' });
 
+  // Build output items with routing properties
+  const outputs: OutputItem[] = outputEntityIds.map(id => ({
+    entity_id: id,
+    needs_ocr: true,     // All render mode outputs need OCR
+    page_type: 'image' as const,
+  }));
+
   const result: PdfResult = {
     source_id: job.entity_id,
     total_pages: totalPages,
     pages: pageResults,
     entity_ids: outputEntityIds,
+    outputs,
   };
 
-  console.log(`[job] Processing complete: ${totalPages} pages converted (${outputEntityIds.length} outputs)`);
+  console.log(`[job] Processing complete: ${totalPages} pages converted (${outputs.length} outputs)`);
 
   return {
     entity_ids: outputEntityIds,
