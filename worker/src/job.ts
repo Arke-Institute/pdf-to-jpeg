@@ -7,8 +7,7 @@
  * 3. Returning the output entity IDs for workflow handoff
  */
 
-import type { ArkeClient } from '@arke-institute/sdk';
-import type { KladosLogger, KladosRequest, Output } from '@arke-institute/rhiza';
+import type { KladosJob, Output } from '@arke-institute/rhiza';
 import type { Env, TargetProperties } from './types.js';
 import { LambdaClient } from './lambda-client.js';
 
@@ -16,23 +15,14 @@ import { LambdaClient } from './lambda-client.js';
  * Context provided to processJob
  */
 export interface ProcessContext {
-  /** The original request */
-  request: KladosRequest;
-
-  /** Arke client for API calls */
-  client: ArkeClient;
-
-  /** Logger for messages (stored in the klados_log) */
-  logger: KladosLogger;
+  /** KladosJob instance (provides client, logger, request, fetchTarget, etc.) */
+  job: KladosJob;
 
   /** SQLite storage for checkpointing long operations */
   sql: SqlStorage;
 
   /** Worker environment bindings (secrets, vars, DO namespaces) */
   env: Env;
-
-  /** Agent auth token (passed to Lambda) */
-  authToken: string;
 }
 
 /**
@@ -55,7 +45,9 @@ export interface ProcessResult {
  * - Final call: Return output entity IDs
  */
 export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
-  const { request, logger, sql, env, authToken } = ctx;
+  const { job, sql, env } = ctx;
+  const { request, log: logger } = job;
+  const authToken = job.config.authToken!;
 
   // =========================================================================
   // Initialize poll state table
@@ -156,18 +148,18 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   sql.exec('DELETE FROM poll_state WHERE id = 1');
 
   const totalPages = status.result?.total_pages || 0;
-  const pages = status.result?.pages || [];
+  const outputs = status.result?.outputs || status.result?.pages || [];
 
   logger.success(`Completed: ${totalPages} pages processed`, {
-    entity_count: pages.length,
+    output_count: outputs.length,
     poll_count: pollCount,
   });
 
   return {
-    outputs: pages.map((page) => ({
-      entity_id: page.entity_id,
-      needs_ocr: page.needs_ocr,
-      page_type: page.page_type,
+    outputs: outputs.map((item) => ({
+      entity_id: item.entity_id,
+      needs_ocr: item.needs_ocr,
+      page_type: item.page_type,
     })),
   };
 }
