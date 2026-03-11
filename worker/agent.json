@@ -55,39 +55,39 @@
     },
 
     "klados_input": {
-      "description": "Parameters passed via workflow input or request.input to customize PDF rendering.",
+      "description": "Parameters passed via workflow input or request.input to customize PDF rendering. Properties map directly to keys in request.input.",
       "properties": {
-        "optional": {
-          "target_file_key": {
-            "type": "string",
-            "description": "Specific file key to process when entity has multiple file attachments. If not specified, uses the first PDF found.",
-            "examples": ["original_pdf", "document"]
-          },
-          "options": {
-            "type": "object",
-            "description": "PDF rendering options passed to Ghostscript",
-            "properties": {
-              "quality": {
-                "type": "integer",
-                "description": "JPEG quality from 1-100. Higher values produce larger files with better quality.",
-                "default": 85,
-                "minimum": 1,
-                "maximum": 100
-              },
-              "dpi": {
-                "type": "integer",
-                "description": "Render resolution in dots per inch. 300 DPI is good for OCR, 150 DPI for previews.",
-                "default": 300,
-                "minimum": 72,
-                "maximum": 600
-              },
-              "max_dimension": {
-                "type": "integer",
-                "description": "Maximum width or height in pixels. Images exceeding this are resized proportionally.",
-                "default": 2400,
-                "minimum": 100,
-                "maximum": 10000
-              }
+        "target_file_key": {
+          "type": "string",
+          "required": false,
+          "description": "Specific file key to process when entity has multiple file attachments. If not specified, uses the first PDF found.",
+          "examples": ["original_pdf", "document"]
+        },
+        "options": {
+          "type": "object",
+          "required": false,
+          "description": "PDF rendering options passed to Ghostscript",
+          "properties": {
+            "quality": {
+              "type": "integer",
+              "description": "JPEG quality from 1-100. Higher values produce larger files with better quality.",
+              "default": 85,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "dpi": {
+              "type": "integer",
+              "description": "Render resolution in dots per inch. 300 DPI is good for OCR, 150 DPI for previews.",
+              "default": 300,
+              "minimum": 72,
+              "maximum": 600
+            },
+            "max_dimension": {
+              "type": "integer",
+              "description": "Maximum width or height in pixels. Images exceeding this are resized proportionally.",
+              "default": 2400,
+              "minimum": 100,
+              "maximum": 10000
             }
           }
         }
